@@ -1,0 +1,209 @@
+import pandas as pd
+import torch
+from sklearn.model_selection import train_test_split
+from transformers import BertTokenizer, BertForSequenceClassification, Trainer, TrainingArguments
+from sklearn.preprocessing import LabelEncoder
+from datasets import Dataset
+import numpy as np
+from transformers import AutoTokenizer, AutoModel
+import os
+
+# 设置设备
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"使用设备: {device}")
+
+# 加载新的数据集
+def load_new_dataset():
+    """加载新的数据集"""
+    df = pd.read_csv('new_dataset.csv')
+    print(f"数据集大小: {len(df)}")
+    print(f"类别分布:")
+    print(df['label'].value_counts())
+    return df
+
+# 数据预处理
+def preprocess_data(df):
+    """预处理数据"""
+    # 初始化LabelEncoder
+    label_encoder = LabelEncoder()
+    
+    # 提取文本和标签
+    texts = df['text'].values
+    labels = label_encoder.fit_transform(df['label'].values)
+    
+    print(f"类别数: {len(label_encoder.classes_)}")
+    print(f"类别名称: {label_encoder.classes_}")
+    
+    return texts, labels, label_encoder
+
+# 创建数据集
+def create_datasets(texts, labels, tokenizer, max_length=128):
+    """创建训练和测试数据集"""
+    # 分割数据集
+    train_texts, val_texts, train_labels, val_labels = train_test_split(
+        texts, labels, test_size=0.2, random_state=42, stratify=labels
+    )
+    
+    print(f"训练集大小: {len(train_texts)}")
+    print(f"验证集大小: {len(val_texts)}")
+    
+    # 编码文本
+    train_encodings = tokenizer(
+        list(train_texts), 
+        truncation=True, 
+        padding=True, 
+        max_length=max_length
+    )
+    val_encodings = tokenizer(
+        list(val_texts), 
+        truncation=True, 
+        padding=True, 
+        max_length=max_length
+    )
+    
+    # 创建数据集
+    train_dataset = Dataset.from_dict({
+        'input_ids': train_encodings['input_ids'],
+        'attention_mask': train_encodings['attention_mask'],
+        'labels': train_labels
+    })
+    
+    val_dataset = Dataset.from_dict({
+        'input_ids': val_encodings['input_ids'],
+        'attention_mask': val_encodings['attention_mask'],
+        'labels': val_labels
+    })
+    
+    return train_dataset, val_dataset
+
+# 计算评估指标
+def compute_metrics(eval_pred):
+    """计算评估指标"""
+    logits, labels = eval_pred
+    predictions = np.argmax(logits, axis=-1)
+    accuracy = (predictions == labels).mean()
+    
+    # 计算每个类别的准确率
+    from sklearn.metrics import classification_report, confusion_matrix
+    
+    print("\n分类报告:")
+    print(classification_report(labels, predictions))
+    
+    return {'accuracy': accuracy}
+
+# 主训练函数
+def train_bert_model():
+    """训练BERT模型"""
+    
+    # 1. 加载数据
+    print("=== 1. 加载数据 ===")
+    df = load_new_dataset()
+    
+    # 2. 预处理数据
+    print("\n=== 2. 预处理数据 ===")
+    texts, labels, label_encoder = preprocess_data(df)
+    num_labels = len(label_encoder.classes_)
+    
+    # 3. 加载BERT模型和分词器
+    print("\n=== 3. 加载BERT模型 ===")
+    
+    # 使用中文BERT模型
+    model_name = "bert-base-chinese"
+    
+    try:
+        tokenizer = BertTokenizer.from_pretrained(model_name)
+        model = BertForSequenceClassification.from_pretrained(
+            model_name, 
+            num_labels=num_labels
+        )
+        print(f"成功加载预训练模型: {model_name}")
+    except Exception as e:
+        print(f"加载预训练模型失败: {e}")
+        print("使用本地模型路径...")
+        # 如果网络问题，使用本地路径
+        local_model_path = "./assets/models/bert-base-chinese/"
+        if os.path.exists(local_model_path):
+            tokenizer = BertTokenizer.from_pretrained(local_model_path)
+            model = BertForSequenceClassification.from_pretrained(
+                local_model_path, 
+                num_labels=num_labels
+            )
+        else:
+            print("本地模型不存在，请下载或检查网络连接")
+            return None, None
+    
+    # 4. 创建数据集
+    print("\n=== 4. 创建数据集 ===")
+    train_dataset, val_dataset = create_datasets(texts, labels, tokenizer)
+    
+    # 5. 设置训练参数
+    print("\n=== 5. 设置训练参数 ===")
+    training_args = TrainingArguments(
+        output_dir='./new_model_weights/',          # 输出目录
+        num_train_epochs=3,                        # 训练轮数
+        per_device_train_batch_size=16,            # 训练批次大小
+        per_device_eval_batch_size=16,             # 评估批次大小
+        warmup_steps=500,                          # 预热步数
+        weight_decay=0.01,                         # 权重衰减
+        logging_dir='./logs',                      # 日志目录
+        logging_steps=100,                         # 日志间隔
+        evaluation_strategy="epoch",               # 评估策略
+        save_strategy="epoch",                     # 保存策略
+        load_best_model_at_end=True,               # 加载最佳模型
+        metric_for_best_model="accuracy",          # 最佳模型指标
+        greater_is_better=True,                    # 指标越大越好
+        save_total_limit=2,                      # 最多保存2个模型
+        learning_rate=2e-5,                        # 学习率
+    )
+    
+    # 6. 创建Trainer
+    print("\n=== 6. 创建训练器 ===")
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
+        compute_metrics=compute_metrics,
+    )
+    
+    # 7. 训练模型
+    print("\n=== 7. 开始训练 ===")
+    trainer.train()
+    
+    # 8. 评估模型
+    print("\n=== 8. 模型评估 ===")
+    eval_results = trainer.evaluate()
+    print(f"评估结果: {eval_results}")
+    
+    # 9. 保存模型和相关信息
+    print("\n=== 9. 保存模型 ===")
+    
+    # 保存模型
+    trainer.save_model('./new_model_weights/best_model/')
+    tokenizer.save_pretrained('./new_model_weights/best_model/')
+    
+    # 保存标签编码器
+    import joblib
+    joblib.dump(label_encoder, './new_model_weights/label_encoder.pkl')
+    
+    # 保存标签映射
+    label_mapping = dict(zip(label_encoder.classes_, label_encoder.transform(label_encoder.classes_)))
+    with open('./new_model_weights/label_mapping.txt', 'w', encoding='utf-8') as f:
+        for label, idx in label_mapping.items():
+            f.write(f"{label}: {idx}\n")
+    
+    print("模型保存完成!")
+    print(f"模型路径: ./new_model_weights/best_model/")
+    print(f"标签编码器路径: ./new_model_weights/label_encoder.pkl")
+    
+    return model, tokenizer, label_encoder
+
+if __name__ == "__main__":
+    # 训练模型
+    model, tokenizer, label_encoder = train_bert_model()
+    
+    if model is not None:
+        print("\n=== 训练完成！===")
+        print("模型已准备好进行测试和部署。")
+    else:
+        print("\n=== 训练失败！===")
