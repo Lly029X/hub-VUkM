@@ -5,7 +5,7 @@ import openai
 import json
 
 client = openai.OpenAI(
-    api_key="sk-8b47344f618342eaa3fdbab260e9e7a1",
+    api_key="sk-8b47344abuabuabu260e9e7a1",
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
 )
 
