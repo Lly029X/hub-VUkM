@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 
 # ================== 配置 OpenAI 客户端 ==================
-api_key = os.getenv("DASHSCOPE_API_KEY", "sk-b872dc69e65543658466dc1bcfec3233")  # API Key 或设置环境变量
+api_key = os.getenv("DASHSCOPE_API_KEY", "sk-b872dabuabuabu6dc1bcfec3233")  # API Key 或设置环境变量
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 client = openai.OpenAI(
