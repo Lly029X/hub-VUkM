@@ -1,3 +1,5 @@
+准备：dify本地部署：
+![img_2.png](img_2.png)
 
 1.增加age
 ![img.png](img.png)
